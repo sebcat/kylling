@@ -42,7 +42,11 @@
   (string-delete (->char-set chars) str))
 
 (define (privmsg k dst msg)
-  (format (kylling-out k) "PRIVMSG ~a :~a\r\n" dst (strip-chars msg "\r\n\t")))
+  (if (string? msg)
+    (format (kylling-out k) "PRIVMSG ~a :~a\r\n" dst
+            (strip-chars msg "\r\n\t"))
+    (privmsg k dst (format #f "~a" msg))))
+
 
 (define (exn-message e)
   ((condition-property-accessor 'exn 'message "unknown error") e))
