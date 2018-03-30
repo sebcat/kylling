@@ -1,4 +1,4 @@
-(use tcp irregex srfi-13 srfi-14 ports)
+(use tcp irregex ports srfi-13 srfi-14 srfi-69)
 
 (foreign-declare
   "#include <sys/capsicum.h>")
@@ -14,19 +14,6 @@
 
 (define (make-default-kylling)
   (make-kylling "irc.efnet.org" "6667" "#scmc_" "plain" "kylling" #f #f))
-
-(define (parse-opts kylling opts)
-  (if (null? opts)
-    kylling
-    (let ([opt (car opts)])
-      (cond
-        [(equal? opt "-server") (kylling-server-set! kylling (cadr opts))]
-        [(equal? opt "-port") (kylling-port-set! kylling (cadr opts))]
-        [(equal? opt "-channel") (kylling-channel-set! kylling (cadr opts))]
-        [(equal? opt "-transport") (kylling-transport-set! kylling (cadr opts))]
-        [(equal? opt "-nick") (kylling-nick-set! kylling (cadr opts))]
-        [#t (error "invalid option:" opt)])
-      (parse-opts kylling (cddr opts)))))
 
 (define (prefix->nick prefix)
   (cond
@@ -58,14 +45,35 @@
         (privmsg k dst (eval (read)))
         [var () (privmsg k dst (exn-message var))]))))
 
+(define cmd-table (make-hash-table))
+
+(define (define-cmd k dst rest)
+  (cond
+    ((irregex-match "([^ ]+) +(.*)" rest) =>
+      (lambda (m)
+        (with-input-from-string (irregex-match-substring m 2)
+          (lambda ()
+            (condition-case
+              (hash-table-set! cmd-table (irregex-match-substring m 1)
+                               (eval (read)))
+              [var () (privmsg k dst (exn-message var))])))))))
+
 (define (process-privmsg* k dst msg)
   (cond
-    ((irregex-match "!echo (.*)" msg) =>
+    ((irregex-match "!define +(.*)" msg) =>
       (lambda (m)
-        (privmsg k dst (irregex-match-substring m 1))))
-    ((irregex-match "!eval (.*)" msg) =>
+        (define-cmd k dst (irregex-match-substring m 1))))
+    ((irregex-match "!([^ ]+) *(.*)" msg) =>
       (lambda (m)
-        (eval-cmd k dst (irregex-match-substring m 1))))))
+        (if (hash-table-exists? cmd-table (irregex-match-substring m 1))
+          (condition-case
+            (let
+              ([val (hash-table-ref cmd-table (irregex-match-substring m 1))])
+              (if (procedure? val)
+                (val k dst (irregex-match-substring m 2))
+                (privmsg k dst val)))
+            [var () (privmsg k dst (exn-message var))])
+          (privmsg k dst "no such symbol"))))))
 
 (define (process-privmsg k prefix params)
   (cond
@@ -83,8 +91,7 @@
   (cond
     ((irregex-match "(:([^ ]+) )?([^ ]+)(.*)?\r?\n?" line) =>
       (lambda (m)
-        (let (
-              [prefix (irregex-match-substring m 2)]
+        (let ([prefix (irregex-match-substring m 2)]
               [cmd (irregex-match-substring m 3)]
               [params (irregex-match-substring m 4)])
           (cond
@@ -110,6 +117,19 @@
         (begin
           (process-line k line)
           (loop (read-line in)))))))
+
+(define (parse-opts kylling opts)
+  (if (null? opts)
+    kylling
+    (let ([opt (car opts)])
+      (cond
+        [(equal? opt "-server") (kylling-server-set! kylling (cadr opts))]
+        [(equal? opt "-port") (kylling-port-set! kylling (cadr opts))]
+        [(equal? opt "-channel") (kylling-channel-set! kylling (cadr opts))]
+        [(equal? opt "-transport") (kylling-transport-set! kylling (cadr opts))]
+        [(equal? opt "-nick") (kylling-nick-set! kylling (cadr opts))]
+        [#t (error "invalid option:" opt)])
+      (parse-opts kylling (cddr opts)))))
 
 
 (tcp-read-timeout #f)
